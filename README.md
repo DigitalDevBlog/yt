@@ -1,8 +1,8 @@
 # yt
 
 CLI that takes a YouTube URL and outputs the video's transcript, duration in
-minutes, and comments — as plain text or JSON. Written in Rust (converted from
-the original Go version).
+minutes, and comments — as plain text or JSON. Written in Rust, converted from
+the original Go version at [danielmiessler/yt](https://github.com/danielmiessler/yt).
 
 ## Install
 
