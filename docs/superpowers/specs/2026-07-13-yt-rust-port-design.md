@@ -52,7 +52,9 @@ double-dash invocations keep working. Short aliases are new.
 ## Behavior
 
 1. **Config:** load `~/.config/fabric/.env` via `dotenvy`; read `YOUTUBE_API_KEY`.
-   Missing file or key → error with the same remediation hint as the Go version
+   The key is only required for modes that call the YouTube Data API (duration,
+   comments, combined); `--transcript` works without one. Missing key in a mode
+   that needs it → error with the same remediation hint as the Go version
    (`echo YOUTUBE_API_KEY="[Your API Key]" >> ~/.config/fabric/.env`).
 2. **Video ID:** extracted with the same regex as the Go version
    (`youtube.com/watch?v=`, `youtu.be/`, embed/v/e forms; 11-char ID).
@@ -60,12 +62,16 @@ double-dash invocations keep working. Short aliases are new.
 3. **Duration:** `GET https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id={id}&key={key}`,
    parse `items[0].contentDetails.duration` (ISO-8601 like `PT1H2M30S`) with a
    regex, output whole minutes.
-4. **Transcript:** fetch `https://www.youtube.com/watch?v={id}`, regex out
-   `"captionTracks":(\[.*?\])`, deserialize to a list of
-   `{baseUrl, languageCode}`. Pick the track whose `languageCode` matches
-   `--lang`; fall back to the first track. Fetch the track XML and concatenate
-   the `<text>` node contents, space-separated, entity-decoded.
-   Any transcript failure is not fatal: the output contains
+4. **Transcript:** *(changed from the original watch-page scraping design —
+   YouTube now serves an empty body for caption URLs scraped from the watch
+   page, which also silently broke the Go version.)* POST to the InnerTube
+   player endpoint (`https://www.youtube.com/youtubei/v1/player`) as the
+   Android client; its `captionTracks` URLs still serve caption XML. Pick the
+   track matching `--lang`, preferring human captions over auto-generated
+   (`kind: "asr"`); fall back to the first (manual) track. Parse both the
+   legacy `<transcript><text>` and current `<timedtext format="3"><p>` XML
+   formats, space-separated, entity-decoded. No API key required for this
+   path. Any transcript failure is not fatal: the output contains
    `Transcript not available. (<reason>)` instead, matching Go.
 5. **Comments:** fetched when `--comments` is set *or* in the default combined
    mode. (In Go, only `--comments` triggered the fetch, so the combined JSON
