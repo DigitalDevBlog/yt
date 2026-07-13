@@ -2,6 +2,9 @@
 name = "yt"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+repository = "https://github.com/DigitalDevBlog/yt"
+description = "YouTube transcript, duration and comments CLI"
 
 [dependencies]
 anyhow = "1"

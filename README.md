@@ -36,3 +36,8 @@ echo 'YOUTUBE_API_KEY="[Your API Key]"' >> ~/.config/yt/.env
 ```
 
 The transcript mode needs no API key.
+
+## License
+
+[MIT](LICENSE), with attribution to the original Go version by Daniel Miessler
+and contributors.
