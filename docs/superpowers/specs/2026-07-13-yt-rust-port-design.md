@@ -11,7 +11,7 @@ repo. Same CLI interface and output shapes, with three deliberate improvements
 
 `yt` takes a YouTube URL and outputs the video's transcript, duration in minutes,
 and optionally its comments — as plain text or JSON — for use in pipelines
-(e.g. fabric).
+(e.g. `jq`, an LLM prompt).
 
 ## Decisions
 
@@ -30,7 +30,7 @@ and optionally its comments — as plain text or JSON — for use in pipelines
 | `reqwest` (blocking, json, rustls-tls) | HTTP |
 | `serde`, `serde_json` | JSON in/out |
 | `regex` | video-ID, captionTracks, ISO-8601 duration |
-| `dotenvy` | load `~/.config/fabric/.env` |
+| `dotenvy` | load `~/.config/yt/.env` |
 | `quick-xml` | transcript XML parsing |
 | `html-escape` | decode HTML entities in transcript text |
 | `anyhow` | error handling |
@@ -51,11 +51,13 @@ double-dash invocations keep working. Short aliases are new.
 
 ## Behavior
 
-1. **Config:** load `~/.config/fabric/.env` via `dotenvy`; read `YOUTUBE_API_KEY`.
+1. **Config:** load `~/.config/yt/.env` via `dotenvy` (own config dir — no
+   fabric dependency, changed from the Go version's `~/.config/fabric/.env`);
+   read `YOUTUBE_API_KEY`, which may also come from the environment directly.
    The key is only required for modes that call the YouTube Data API (duration,
    comments, combined); `--transcript` works without one. Missing key in a mode
-   that needs it → error with the same remediation hint as the Go version
-   (`echo YOUTUBE_API_KEY="[Your API Key]" >> ~/.config/fabric/.env`).
+   that needs it → error with a remediation hint
+   (`echo YOUTUBE_API_KEY="[Your API Key]" >> ~/.config/yt/.env`).
 2. **Video ID:** extracted with the same regex as the Go version
    (`youtube.com/watch?v=`, `youtu.be/`, embed/v/e forms; 11-char ID).
    Invalid URL → error.

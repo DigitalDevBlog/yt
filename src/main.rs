@@ -261,7 +261,7 @@ fn main() -> Result<()> {
     let options = Options::parse();
 
     let home = std::env::var("HOME").context("could not determine home directory")?;
-    let env_file = format!("{home}/.config/fabric/.env");
+    let env_file = format!("{home}/.config/yt/.env");
     let _ = dotenvy::from_path(&env_file);
     // Only the duration and comments modes talk to the YouTube Data API; the
     // transcript comes from the InnerTube endpoint and needs no key.
@@ -269,8 +269,8 @@ fn main() -> Result<()> {
     let require_key = || {
         api_key.clone().ok_or_else(|| {
             anyhow!(
-                "YOUTUBE_API_KEY not found in ~/.config/fabric/.env. To add please run \
-                 `echo YOUTUBE_API_KEY=\"[Your API Key]\" >> ~/.config/fabric/.env`."
+                "YOUTUBE_API_KEY not set. Export it, or store it with \
+                 `mkdir -p ~/.config/yt && echo YOUTUBE_API_KEY=\"[Your API Key]\" >> ~/.config/yt/.env`."
             )
         })
     };

@@ -3,7 +3,7 @@
 `yt` is a command-line tool that takes a YouTube URL and gives you the video's
 **transcript**, **duration**, and **comments** — as plain text or JSON. It is
 built for pipelines: point it at a video, pipe the output into whatever
-processes it next (e.g. fabric patterns, `jq`, an LLM prompt).
+processes it next (e.g. `jq`, a summarizer, an LLM prompt).
 
 ---
 
@@ -29,11 +29,10 @@ v3** and need an API key. The transcript feature needs **no key**.
 2. Store it where `yt` looks for it:
 
    ```sh
-   mkdir -p ~/.config/fabric
-   echo 'YOUTUBE_API_KEY="[Your API Key]"' >> ~/.config/fabric/.env
+   mkdir -p ~/.config/yt
+   echo 'YOUTUBE_API_KEY="[Your API Key]"' >> ~/.config/yt/.env
    ```
 
-`yt` shares this config location with [fabric](https://github.com/danielmiessler/fabric).
 A `YOUTUBE_API_KEY` environment variable set in your shell also works and
 takes effect even without the file.
 
@@ -92,7 +91,7 @@ Prints the spoken text as one line of plain text, HTML entities decoded.
 Handy directly in a pipeline:
 
 ```sh
-yt -t "https://youtu.be/dQw4w9WgXcQ" | fabric --pattern summarize
+yt -t "https://youtu.be/dQw4w9WgXcQ" | llm "summarize this transcript"
 ```
 
 If the video has no captions (or YouTube refuses to serve them), the tool
@@ -147,7 +146,7 @@ the fallback instead).
 
 - **No URL / unrecognized flags** — usage error from the CLI parser (exit 2).
 - **`Invalid YouTube URL`** — no 11-character video ID could be extracted.
-- **`YOUTUBE_API_KEY not found ...`** — you used a mode that needs the API
+- **`YOUTUBE_API_KEY not set ...`** — you used a mode that needs the API
   key (duration, comments, or the default combined mode) without configuring
   one. The message includes the command to fix it.
 - **`error getting video details` / `video not found`** — the Data API call

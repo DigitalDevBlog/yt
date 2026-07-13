@@ -27,10 +27,12 @@ With no flags, outputs a JSON object with all three:
 ## Configuration
 
 The duration and comments modes use the YouTube Data API v3 and need an API
-key in `~/.config/fabric/.env`:
+key, either as a `YOUTUBE_API_KEY` environment variable or stored in
+`~/.config/yt/.env`:
 
 ```sh
-echo 'YOUTUBE_API_KEY="[Your API Key]"' >> ~/.config/fabric/.env
+mkdir -p ~/.config/yt
+echo 'YOUTUBE_API_KEY="[Your API Key]"' >> ~/.config/yt/.env
 ```
 
 The transcript mode needs no API key.
