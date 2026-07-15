@@ -19,8 +19,8 @@ workflows with a single command.
 | Attribute | Value |
 |-----------|-------|
 | Type | Application (CLI) |
-| Version | 0.1.0 |
-| Status | v0.1 complete (title, summarization, progress UI shipped) |
+| Version | 0.2.0 |
+| Status | Released 0.2.0 — title, summarization, progress UI shipped |
 | Last Updated | 2026-07-15 |
 
 ## Requirements
