@@ -1,1 +1,7 @@
 /target
+
+# Transcript summaries / drafts written to the repo root (e.g. by `yt -s` / `-u`);
+# keep the project docs tracked.
+/*.md
+!/README.md
+!/MANUAL.md
