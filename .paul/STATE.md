@@ -6,25 +6,25 @@ See: .paul/PROJECT.md (updated 2026-07-15)
 
 **Core value:** Anyone can pipe a YouTube video's transcript and metadata into
 their LLM/AI workflows with a single command.
-**Current focus:** v0.1 milestone COMPLETE — all 3 phases shipped
+**Current focus:** v0.3 milestone COMPLETE — Capacities upload shipped (0.3.0)
 
 ## Current Position
 
-Milestone: v0.1 LLM Workflow Extensions — ✅ Complete
-Phase: 3 of 3 (Progress UI) — Complete
-Plan: 03-01 complete
-Status: Milestone complete — ready for next milestone or release
-Last activity: 2026-07-15 — Phase 3 complete; v0.1 milestone done
+Milestone: v0.3 Integrations — ✅ Complete
+Phase: 4 (Upload to Capacities) — Complete
+Plan: 04-01 complete
+Status: Milestone complete — ready for release or next milestone
+Last activity: 2026-07-15 — Phase 4 complete; v0.3 milestone done (0.3.0)
 
 Progress:
-- Milestone: [██████████] 100% (3 of 3 phases)
+- v0.1: [██████████] 100% (0.2.0) · v0.3: [██████████] 100% (0.3.0)
 
 ## Loop Position
 
 Current loop state:
 ```
 PLAN ──▶ APPLY ──▶ UNIFY
-  ✓        ✓        ✓     [Loop complete — milestone v0.1 done]
+  ✓        ✓        ✓     [Loop complete — v0.3 milestone done]
 ```
 
 ## Phase Results
@@ -39,12 +39,17 @@ PLAN ──▶ APPLY ──▶ UNIFY
   (transcript bytes, comment pagination) that stay put once finished; wired into
   summarize too. Deviations: "bar on every step" + "finished bars stay put" UX
   refinements per user feedback. → 03-01-SUMMARY.md
+- Phase 4 (Upload to Capacities): `-u`/`--upload` → Atomic Note + link at the
+  bottom of the Inbox page (Capacities v2.0 REST). 20 tests, live end-to-end
+  verified. Two live-caught deviations: append body shape (position object +
+  EntityBlock) and trust-but-verify read-back on append. Shipped as 0.3.0.
+  → 04-01-SUMMARY.md
 
 ## Git State
 
-Last commit: 768536e (Phases 1–2). UNCOMMITTED: Phase 3 changes to src/main.rs
-(progress UI) + .paul/ artifacts. Installed `yt` is up to date with Phase 3.
-Commit deferred per user preference (no auto-commit; no Claude co-author trailer).
+Last commit: 367058b (through Phase 3 + version 0.2.0). UNCOMMITTED: Phase 4
+(Capacities upload) — src/main.rs, MANUAL.md, README.md, Cargo.toml/lock (0.3.0),
+.paul/ artifacts. Installed `yt` is 0.3.0 (current). No Claude co-author trailer.
 
 ## Accumulated Context
 
@@ -71,8 +76,8 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-07-15
-Stopped at: v0.1 milestone complete (Phases 1–3 shipped, verified)
-Next action: Commit/push Phase 3, then start a new milestone (/paul:milestone) or release
+Stopped at: v0.3 milestone complete (Phase 4 — Capacities upload — shipped as 0.3.0)
+Next action: Commit/push Phase 4, then release (tag v0.3.0) or next milestone
 Resume file: .paul/ROADMAP.md
 
 ---

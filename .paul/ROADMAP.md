@@ -10,9 +10,11 @@ summary pipeline.
 
 ## Current Milestone
 
-**v0.1 LLM Workflow Extensions** (v0.1.0)
+**v0.3 Integrations** (0.3.0)
 Status: ✅ Complete
-Phases: 3 of 3 complete
+Phases: 1 of 1 (Phase 4)
+
+Previous: **v0.1 LLM Workflow Extensions** — ✅ Complete (shipped as 0.2.0, Phases 1–3)
 
 ## Phases
 
@@ -27,6 +29,7 @@ Phases execute in numeric order: 1 → 2 → 3
 | 1 | Title Capture | 1 | ✅ Complete | 2026-07-15 |
 | 2 | Claude Summarization | 1 | ✅ Complete | 2026-07-15 |
 | 3 | Progress UI | 1 | ✅ Complete | 2026-07-15 |
+| 4 | Upload to Capacities | 1 | ✅ Complete | 2026-07-15 |
 
 ## Phase Details
 
@@ -89,6 +92,27 @@ stderr, via `indicatif`) already shipped in Phase 2 for the summarize flow.
   fetched / target) and transcript download (bytes when content-length known)
 - Keep spinners for non-measurable steps; all progress to stderr
 
+### Phase 4: Upload to Capacities  [v0.3 Integrations]
+
+**Goal:** A `-u`/`--upload` flag that pushes the Claude summary to Capacities as
+an atomic weblink node (video title + link + summary) in the "Research & Study"
+space — building a personal knowledge base of watched videos.
+**Depends on:** Phase 2 (summary) and Phase 1 (title)
+**Research:** Likely — new Capacities API v2.0 endpoints, space name→UUID
+resolution, and inbox targeting.
+
+**Scope:**
+- `-u` / `--upload` flag (implies `-s`)
+- POST video URL + title + summary + tag to the Capacities **new-API** (v2.0)
+  weblink/object endpoint; Bearer `CAPACITIES_IO_API_KEY`; space resolved from
+  `CAPACITIES_IO_SPACE_ID` ("Research & Study" name → UUID)
+- Add an "Uploading to Capacities" step to the progress UI; fail gracefully if
+  only the upload step errors
+- Full context, decisions, and open questions:
+  `.paul/phases/04-capacities-upload/CONTEXT.md`
+
+**Deferred (future phase):** multiple spaces + multiple API keys.
+
 ---
 *Roadmap created: 2026-07-15*
-*Last updated: 2026-07-15*
+*Last updated: 2026-07-15 — added Phase 4 (v0.3 Integrations)*

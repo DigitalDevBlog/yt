@@ -39,6 +39,10 @@ struct Options {
     #[arg(short = 'p', long)]
     prompt: Option<String>,
 
+    /// Summarize, then upload as an Atomic Note to Capacities (implies --summarize)
+    #[arg(short = 'u', long)]
+    upload: bool,
+
     /// Language for the transcript
     #[arg(short, long, default_value = "en")]
     lang: String,
@@ -659,12 +663,17 @@ fn run_summary(
     video_id: &str,
     lang: &str,
     prompt: &str,
+    upload: bool,
 ) -> Result<PathBuf> {
-    let steps = Steps::new(&[
+    let mut step_titles = vec![
         "Fetching video details",
         "Downloading transcript",
         "Summarizing with claude",
-    ]);
+    ];
+    if upload {
+        step_titles.push("Uploading to Capacities");
+    }
+    let steps = Steps::new(&step_titles);
 
     steps.start(0);
     let details = match get_video_details(client, api_key, video_id) {
@@ -703,8 +712,221 @@ fn run_summary(
     };
 
     let path = PathBuf::from(format!("{}.md", sanitize_filename(&details.title, video_id)));
-    std::fs::write(&path, summary).with_context(|| format!("failed to write {}", path.display()))?;
+    std::fs::write(&path, &summary).with_context(|| format!("failed to write {}", path.display()))?;
+
+    if upload {
+        steps.start(3);
+        // A failed upload is non-fatal: keep the local .md and don't panic.
+        match capacities_publish(client, &details.title, &summary) {
+            Ok(note_id) => {
+                steps.done(3);
+                eprintln!("Uploaded to Capacities: {note_id} (linked in Inbox)");
+            }
+            Err(e) => {
+                steps.fail(3);
+                eprintln!("Capacities upload failed: {e:#}");
+            }
+        }
+    }
+
     Ok(path)
+}
+
+const CAPACITIES_BASE: &str = "https://api.capacities.io";
+
+/// Send a Capacities request, returning parsed JSON or a clear error that
+/// includes the HTTP status and a short body snippet.
+fn capacities_send_json(
+    req: reqwest::blocking::RequestBuilder,
+    what: &str,
+) -> Result<serde_json::Value> {
+    let resp = req.send().with_context(|| format!("Capacities {what}: request failed"))?;
+    let status = resp.status();
+    let text = resp.text().unwrap_or_default();
+    if !status.is_success() {
+        let snippet: String = text.chars().take(200).collect();
+        let mut msg = format!("Capacities {what}: HTTP {status}: {snippet}");
+        if status.as_u16() == 429 {
+            msg.push_str(" (rate limited — retry after the reset window)");
+        }
+        return Err(anyhow!(msg));
+    }
+    if text.trim().is_empty() {
+        return Ok(serde_json::Value::Null);
+    }
+    serde_json::from_str(&text).with_context(|| format!("Capacities {what}: invalid JSON response"))
+}
+
+/// The space title bound to the token (HTML entities decoded).
+fn capacities_space_title(client: &reqwest::blocking::Client, api_key: &str) -> Result<String> {
+    let v = capacities_send_json(
+        client.get(format!("{CAPACITIES_BASE}/space")).bearer_auth(api_key),
+        "GET /space",
+    )?;
+    let raw = v["title"].as_str().unwrap_or_default();
+    Ok(html_escape::decode_html_entities(raw).into_owned())
+}
+
+/// Resolve an object-type structure id by its title (e.g. "Atomic Note").
+fn capacities_structure_id(
+    client: &reqwest::blocking::Client,
+    api_key: &str,
+    type_title: &str,
+) -> Result<String> {
+    let v = capacities_send_json(
+        client
+            .get(format!("{CAPACITIES_BASE}/space/structures"))
+            .bearer_auth(api_key),
+        "GET /space/structures",
+    )?;
+    v["structures"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|s| s["title"].as_str() == Some(type_title))
+        .and_then(|s| s["id"].as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow!("Capacities object type {type_title:?} not found in this space"))
+}
+
+/// Create an object of the given structure from markdown; returns the new id.
+fn capacities_create_object(
+    client: &reqwest::blocking::Client,
+    api_key: &str,
+    structure_id: &str,
+    markdown: &str,
+) -> Result<String> {
+    let body = json!({ "structureId": structure_id, "markdown": markdown });
+    let v = capacities_send_json(
+        client
+            .post(format!("{CAPACITIES_BASE}/object/markdown"))
+            .bearer_auth(api_key)
+            .json(&body),
+        "POST /object/markdown",
+    )?;
+    v["id"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow!("Capacities create-object response missing an id"))
+}
+
+/// Find a Page object by exact title; returns its id.
+fn capacities_find_page(
+    client: &reqwest::blocking::Client,
+    api_key: &str,
+    title: &str,
+) -> Result<String> {
+    let body = json!({ "query": title, "structureIds": ["RootPage"], "limit": 5 });
+    let v = capacities_send_json(
+        client
+            .post(format!("{CAPACITIES_BASE}/objects/search"))
+            .bearer_auth(api_key)
+            .json(&body),
+        "POST /objects/search",
+    )?;
+    v["results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|r| r["title"].as_str() == Some(title))
+        .and_then(|r| r["id"].as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow!("Capacities page titled {title:?} not found"))
+}
+
+/// Whether the page's content already links to `entity_id` (the entity block
+/// renders in the markdown export as a link containing the object id).
+fn capacities_page_links_entity(
+    client: &reqwest::blocking::Client,
+    api_key: &str,
+    page_id: &str,
+    entity_id: &str,
+) -> Result<bool> {
+    let v = capacities_send_json(
+        client
+            .get(format!("{CAPACITIES_BASE}/object/markdown?id={page_id}"))
+            .bearer_auth(api_key),
+        "GET /object/markdown",
+    )?;
+    Ok(v["markdown"].as_str().is_some_and(|m| m.contains(entity_id)))
+}
+
+/// Append a link (entity block) to `entity_id` at the bottom of `page_id`, then
+/// read the page back to confirm it stuck. Capacities occasionally returns 200
+/// for an append that does not persist (a freshly-created object can briefly be
+/// un-linkable), so we verify and retry rather than trust the status alone.
+fn capacities_append_entity(
+    client: &reqwest::blocking::Client,
+    api_key: &str,
+    page_id: &str,
+    entity_id: &str,
+) -> Result<()> {
+    let body = json!({
+        "id": page_id,
+        "position": { "type": "end" },
+        "blocks": [ { "type": "EntityBlock", "entityId": entity_id } ],
+    });
+    for _ in 0..4 {
+        // Stop if a prior attempt already landed — avoids duplicate links.
+        if capacities_page_links_entity(client, api_key, page_id, entity_id)? {
+            return Ok(());
+        }
+        capacities_send_json(
+            client
+                .post(format!("{CAPACITIES_BASE}/blocks/append"))
+                .bearer_auth(api_key)
+                .json(&body),
+            "POST /blocks/append",
+        )?;
+        std::thread::sleep(Duration::from_millis(800));
+    }
+    if capacities_page_links_entity(client, api_key, page_id, entity_id)? {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "Capacities: the Inbox link did not persist (append returned OK but the \
+             block is not on the page — the note may need a moment to sync; try again)"
+        ))
+    }
+}
+
+/// Create an Atomic Note from the summary and append a link to it at the bottom
+/// of the Inbox page. Returns the new note id.
+fn capacities_publish(
+    client: &reqwest::blocking::Client,
+    title: &str,
+    summary: &str,
+) -> Result<String> {
+    let api_key = std::env::var("CAPACITIES_IO_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty())
+        .ok_or_else(|| anyhow!("CAPACITIES_IO_API_KEY not set (required for --upload)"))?;
+
+    // Sanity check: warn if the token's space isn't the configured one.
+    if let Ok(want) = std::env::var("CAPACITIES_IO_SPACE_ID") {
+        if !want.is_empty() {
+            if let Ok(actual) = capacities_space_title(client, &api_key) {
+                if actual != want {
+                    eprintln!(
+                        "warning: Capacities space is {actual:?}, but CAPACITIES_IO_SPACE_ID is {want:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    let structure_id = capacities_structure_id(client, &api_key, "Atomic Note")?;
+    let markdown = format!("# {title}\n\n{summary}");
+    let note_id = capacities_create_object(client, &api_key, &structure_id, &markdown)?;
+
+    let inbox = std::env::var("CAPACITIES_IO_INBOX_PAGE")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Inbox".to_string());
+    let page_id = capacities_find_page(client, &api_key, &inbox)?;
+    capacities_append_entity(client, &api_key, &page_id, &note_id)?;
+
+    Ok(note_id)
 }
 
 fn main() -> Result<()> {
@@ -745,10 +967,10 @@ fn main() -> Result<()> {
     } else if options.comments {
         let comments = get_comments(&client, &require_key()?, &video_id);
         println!("{}", serde_json::to_string_pretty(&comments)?);
-    } else if options.summarize {
+    } else if options.summarize || options.upload {
         let api_key = require_key()?;
         let prompt = resolve_prompt(options.prompt.clone());
-        let path = run_summary(&client, &api_key, &video_id, &options.lang, &prompt)?;
+        let path = run_summary(&client, &api_key, &video_id, &options.lang, &prompt, options.upload)?;
         eprintln!("Wrote {}", path.display());
     } else {
         let api_key = require_key()?;

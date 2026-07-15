@@ -2,9 +2,10 @@
 
 `yt` is a command-line tool that takes a YouTube URL and gives you the video's
 **title**, **transcript**, **duration**, and **comments** — as plain text or
-JSON — and can **summarize** the video with Claude in a single command. It is
-built for pipelines: point it at a video, pipe the output into whatever
-processes it next (e.g. `jq`, a summarizer, an LLM prompt).
+JSON — can **summarize** the video with Claude, and can **upload** that summary
+to [Capacities](https://capacities.io) as an atomic note. It is built for
+pipelines: point it at a video, pipe the output into whatever processes it next
+(e.g. `jq`, a summarizer, an LLM prompt).
 
 ---
 
@@ -57,6 +58,30 @@ To set your own default prompt, add it alongside the API key:
 echo 'YT_SUMMARY_PROMPT="Summarize this video as 5 bullet points."' >> ~/.config/yt/.env
 ```
 
+### Upload to Capacities (`--upload`)
+
+`--upload` (short: `-u`) sends the summary to [Capacities](https://capacities.io)
+as an **Atomic Note** and links it from your **Inbox** page. It uses the
+Capacities REST API (v2.0), so you need an API token (Settings → Capacities API
+in the desktop app):
+
+```sh
+echo 'CAPACITIES_IO_API_KEY="[Your Capacities token]"' >> ~/.config/yt/.env
+```
+
+The token is **space-bound** — it maps to exactly one Capacities space. Two
+optional settings:
+
+```sh
+# sanity check: warn if the token's space title isn't this
+echo 'CAPACITIES_IO_SPACE_ID="Research & Study"' >> ~/.config/yt/.env
+# the Page to link new notes from (default: "Inbox")
+echo 'CAPACITIES_IO_INBOX_PAGE="Inbox"' >> ~/.config/yt/.env
+```
+
+Your space must already contain an object type named **"Atomic Note"** and a
+Page named **"Inbox"** — both are resolved by name at runtime.
+
 ## Usage
 
 ```
@@ -71,6 +96,7 @@ yt [OPTIONS] <URL>
 | | `--title` | Output only the video title |
 | `-s` | `--summarize` | Summarize the transcript with Claude, writing `<title>.md` |
 | `-p <TEXT>` | `--prompt <TEXT>` | Override the summary prompt (used with `--summarize`) |
+| `-u` | `--upload` | Summarize, then upload the summary to Capacities (implies `--summarize`) |
 | `-l <CODE>` | `--lang <CODE>` | Transcript language (default: `en`) |
 | `-h` | `--help` | Show help |
 | `-V` | `--version` | Show version |
@@ -80,7 +106,8 @@ Accepted URL forms: `youtube.com/watch?v=ID` (with or without `https://` and
 `youtube.com/embed/ID`.
 
 If more than one mode flag is given, precedence is
-`--duration` > `--title` > `--transcript` > `--comments` > `--summarize`.
+`--duration` > `--title` > `--transcript` > `--comments` >
+`--summarize`/`--upload`.
 
 ## Output modes
 
@@ -192,11 +219,32 @@ It needs the API key (for the title) and the `claude` CLI (see
   yt -s -p "List the 3 most important takeaways" "https://youtu.be/dQw4w9WgXcQ"
   ```
 
+### `--upload`: summary → Capacities Atomic Note
+
+```sh
+yt --upload "https://youtu.be/dQw4w9WgXcQ"
+# Uploaded to Capacities: <note-id> (linked in Inbox)
+```
+
+`--upload` (short: `-u`) does everything `--summarize` does — including writing
+the local `<title>.md` — and then:
+
+1. creates a new **Atomic Note** in your Capacities space, with the video title
+   as the note title and the summary as its markdown body, and
+2. appends a **link to that note** at the bottom of your **Inbox** page.
+
+It needs `CAPACITIES_IO_API_KEY` configured (see
+[Upload to Capacities](#upload-to-capacities---upload)). The upload runs as a
+fourth progress step and **fails gracefully**: if the token is missing or the
+API errors, the step shows `✗` with a message on stderr, but your `<title>.md`
+is still written and the run does not abort.
+
 ## Progress display
 
-The `--summarize` and default combined modes show a live, multi-step progress
-display on **stderr** while they work — one line per step, with a `◦` bullet and
-a `|` connector:
+The `--summarize`, `--upload`, and default combined modes show a live,
+multi-step progress display on **stderr** while they work — one line per step,
+with a `◦` bullet and a `|` connector (`--upload` adds a final
+"Uploading to Capacities" step):
 
 ```
 ◦ Fetching video details [0s] ✓
@@ -255,6 +303,8 @@ Two failures are deliberately **not** fatal, so pipelines keep flowing:
 - A missing transcript becomes the text `Transcript not available. (<reason>)`
   in the output.
 - A failed comments fetch becomes an empty array plus a warning on stderr.
+- A failed Capacities upload (`--upload`) prints `Capacities upload failed: ...`
+  on stderr but still writes the local `<title>.md`, and the run exits `0`.
 
 ## Troubleshooting
 

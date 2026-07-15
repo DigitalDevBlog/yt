@@ -19,8 +19,8 @@ workflows with a single command.
 | Attribute | Value |
 |-----------|-------|
 | Type | Application (CLI) |
-| Version | 0.2.0 |
-| Status | Released 0.2.0 — title, summarization, progress UI shipped |
+| Version | 0.3.0 |
+| Status | v0.3 complete — Capacities upload shipped (0.3.0) |
 | Last Updated | 2026-07-15 |
 
 ## Requirements
@@ -43,6 +43,8 @@ workflows with a single command.
       prompt from `.env`, override with `-p`; stepped progress UI) — Phase 2
 - [x] Progress UI on the default run: stepped display with measured bars
       (transcript bytes, comment pagination) that stay put once finished — Phase 3
+- [x] Upload summary to Capacities (`-u`/`--upload` → Atomic Note + link at the
+      bottom of the Inbox page; verified read-back on append) — Phase 4
 
 ### Active (In Progress)
 
@@ -50,7 +52,7 @@ None.
 
 ### Planned (Next)
 
-None — milestone v0.1 complete.
+None — milestone v0.3 complete. Deferred: multi-space + multi-API-key upload.
 
 ### Out of Scope
 
@@ -117,4 +119,4 @@ None — milestone v0.1 complete.
 
 ---
 *Created: 2026-07-15*
-*Last updated: 2026-07-15 after Phase 3 (Progress UI) — milestone v0.1 complete*
+*Last updated: 2026-07-15 after Phase 4 (Capacities upload) — milestone v0.3 complete*

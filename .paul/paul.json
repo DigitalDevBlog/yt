@@ -1,14 +1,14 @@
 {
   "name": "yt",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "milestone": {
-    "name": "v0.1 LLM Workflow Extensions",
-    "version": "0.1.0",
+    "name": "v0.3 Integrations",
+    "version": "0.3.0",
     "status": "complete"
   },
   "phase": {
-    "number": 3,
-    "name": "Progress UI",
+    "number": 4,
+    "name": "Upload to Capacities",
     "status": "complete"
   },
   "loop": {
