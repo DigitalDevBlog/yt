@@ -78,8 +78,7 @@ fn parse_duration_minutes(iso: &str) -> Result<u64> {
 // caption URLs that serve actual XML.
 const INNERTUBE_PLAYER_URL: &str = "https://www.youtube.com/youtubei/v1/player";
 const ANDROID_CLIENT_VERSION: &str = "20.10.38";
-const ANDROID_USER_AGENT: &str =
-    "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip";
+const ANDROID_USER_AGENT: &str = "com.google.android.youtube/20.10.38 (Linux; U; Android 11) gzip";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -138,9 +137,14 @@ fn transcript_xml_to_text(xml: &str) -> Result<String> {
     let mut parts: Vec<String> = Vec::new();
     let is_cue = |name: &[u8]| name == b"text" || name == b"p";
     loop {
-        match reader.read_event().context("failed to parse transcript XML")? {
+        match reader
+            .read_event()
+            .context("failed to parse transcript XML")?
+        {
             Event::Start(e) if is_cue(e.name().as_ref()) => depth_in_cue += 1,
-            Event::End(e) if is_cue(e.name().as_ref()) => depth_in_cue = depth_in_cue.saturating_sub(1),
+            Event::End(e) if is_cue(e.name().as_ref()) => {
+                depth_in_cue = depth_in_cue.saturating_sub(1)
+            }
             Event::Text(e) if depth_in_cue > 0 => {
                 let text = e.unescape().context("failed to unescape transcript text")?;
                 let decoded = html_escape::decode_html_entities(text.as_ref());
@@ -166,7 +170,8 @@ fn fetch_transcript(
     progress: Option<(&Steps, usize)>,
 ) -> Result<String> {
     let tracks = get_caption_tracks(client, video_id)?;
-    let track = pick_caption_track(&tracks, lang).ok_or_else(|| anyhow!("no caption tracks found"))?;
+    let track =
+        pick_caption_track(&tracks, lang).ok_or_else(|| anyhow!("no caption tracks found"))?;
     let response = client
         .get(&track.base_url)
         .header(reqwest::header::USER_AGENT, ANDROID_USER_AGENT)
@@ -192,7 +197,11 @@ fn fetch_transcript(
     transcript_xml_to_text(&xml)
 }
 
-fn get_transcript(client: &reqwest::blocking::Client, video_id: &str, lang: &str) -> Result<String> {
+fn get_transcript(
+    client: &reqwest::blocking::Client,
+    video_id: &str,
+    lang: &str,
+) -> Result<String> {
     fetch_transcript(client, video_id, lang, None)
 }
 
@@ -307,11 +316,7 @@ struct Replies {
     comments: Vec<Comment>,
 }
 
-fn get_comments(
-    client: &reqwest::blocking::Client,
-    api_key: &str,
-    video_id: &str,
-) -> Vec<String> {
+fn get_comments(client: &reqwest::blocking::Client, api_key: &str, video_id: &str) -> Vec<String> {
     let result: Result<CommentThreadsResponse> = (|| {
         Ok(client
             .get("https://www.googleapis.com/youtube/v3/commentThreads")
@@ -424,8 +429,7 @@ fn get_comments_paginated(
     comments
 }
 
-const DEFAULT_SUMMARY_PROMPT: &str =
-    "Summarize the key points and main takeaways of this video transcript as concise bullet points.";
+const DEFAULT_SUMMARY_PROMPT: &str = "Summarize the key points and main takeaways of this video transcript as concise bullet points.";
 
 /// Resolve the summary prompt: explicit --prompt wins, then YT_SUMMARY_PROMPT
 /// from the environment (or ~/.config/yt/.env), then a built-in default.
@@ -457,7 +461,12 @@ fn sanitize_filename(title: &str, video_id: &str) -> String {
         .to_string();
     const MAX: usize = 100;
     if name.chars().count() > MAX {
-        name = name.chars().take(MAX).collect::<String>().trim_end().to_string();
+        name = name
+            .chars()
+            .take(MAX)
+            .collect::<String>()
+            .trim_end()
+            .to_string();
     }
     if name.is_empty() {
         video_id.to_string()
@@ -514,7 +523,10 @@ impl Steps {
         }
         Steps {
             _mp: mp,
-            kinds: titles.iter().map(|_| Cell::new(StepKind::Elapsed)).collect(),
+            kinds: titles
+                .iter()
+                .map(|_| Cell::new(StepKind::Elapsed))
+                .collect(),
             bars,
             titles: titles.iter().map(|t| t.to_string()).collect(),
             _connectors: connectors,
@@ -553,9 +565,11 @@ impl Steps {
         self.kinds[i].set(StepKind::Bytes);
         let pb = &self.bars[i];
         pb.set_style(
-            ProgressStyle::with_template("{prefix} {msg} [{bar:20.cyan/blue}] {bytes}/{total_bytes}")
-                .unwrap()
-                .progress_chars("=> "),
+            ProgressStyle::with_template(
+                "{prefix} {msg} [{bar:20.cyan/blue}] {bytes}/{total_bytes}",
+            )
+            .unwrap()
+            .progress_chars("=> "),
         );
         pb.set_length(len);
         pb
@@ -711,8 +725,12 @@ fn run_summary(
         }
     };
 
-    let path = PathBuf::from(format!("{}.md", sanitize_filename(&details.title, video_id)));
-    std::fs::write(&path, &summary).with_context(|| format!("failed to write {}", path.display()))?;
+    let path = PathBuf::from(format!(
+        "{}.md",
+        sanitize_filename(&details.title, video_id)
+    ));
+    std::fs::write(&path, &summary)
+        .with_context(|| format!("failed to write {}", path.display()))?;
 
     if upload {
         steps.start(3);
@@ -740,7 +758,9 @@ fn capacities_send_json(
     req: reqwest::blocking::RequestBuilder,
     what: &str,
 ) -> Result<serde_json::Value> {
-    let resp = req.send().with_context(|| format!("Capacities {what}: request failed"))?;
+    let resp = req
+        .send()
+        .with_context(|| format!("Capacities {what}: request failed"))?;
     let status = resp.status();
     let text = resp.text().unwrap_or_default();
     if !status.is_success() {
@@ -760,7 +780,9 @@ fn capacities_send_json(
 /// The space title bound to the token (HTML entities decoded).
 fn capacities_space_title(client: &reqwest::blocking::Client, api_key: &str) -> Result<String> {
     let v = capacities_send_json(
-        client.get(format!("{CAPACITIES_BASE}/space")).bearer_auth(api_key),
+        client
+            .get(format!("{CAPACITIES_BASE}/space"))
+            .bearer_auth(api_key),
         "GET /space",
     )?;
     let raw = v["title"].as_str().unwrap_or_default();
@@ -848,7 +870,9 @@ fn capacities_page_links_entity(
             .bearer_auth(api_key),
         "GET /object/markdown",
     )?;
-    Ok(v["markdown"].as_str().is_some_and(|m| m.contains(entity_id)))
+    Ok(v["markdown"]
+        .as_str()
+        .is_some_and(|m| m.contains(entity_id)))
 }
 
 /// Append a link (entity block) to `entity_id` at the bottom of `page_id`, then
@@ -903,16 +927,14 @@ fn capacities_publish(
         .ok_or_else(|| anyhow!("CAPACITIES_IO_API_KEY not set (required for --upload)"))?;
 
     // Sanity check: warn if the token's space isn't the configured one.
-    if let Ok(want) = std::env::var("CAPACITIES_IO_SPACE_ID") {
-        if !want.is_empty() {
-            if let Ok(actual) = capacities_space_title(client, &api_key) {
-                if actual != want {
-                    eprintln!(
-                        "warning: Capacities space is {actual:?}, but CAPACITIES_IO_SPACE_ID is {want:?}"
-                    );
-                }
-            }
-        }
+    if let Ok(want) = std::env::var("CAPACITIES_IO_SPACE_ID")
+        && !want.is_empty()
+        && let Ok(actual) = capacities_space_title(client, &api_key)
+        && actual != want
+    {
+        eprintln!(
+            "warning: Capacities space is {actual:?}, but CAPACITIES_IO_SPACE_ID is {want:?}"
+        );
     }
 
     let structure_id = capacities_structure_id(client, &api_key, "Atomic Note")?;
@@ -970,7 +992,14 @@ fn main() -> Result<()> {
     } else if options.summarize || options.upload {
         let api_key = require_key()?;
         let prompt = resolve_prompt(options.prompt.clone());
-        let path = run_summary(&client, &api_key, &video_id, &options.lang, &prompt, options.upload)?;
+        let path = run_summary(
+            &client,
+            &api_key,
+            &video_id,
+            &options.lang,
+            &prompt,
+            options.upload,
+        )?;
         eprintln!("Wrote {}", path.display());
     } else {
         let api_key = require_key()?;
@@ -993,20 +1022,26 @@ fn main() -> Result<()> {
         };
 
         steps.start(1);
-        let transcript = match fetch_transcript(&client, &video_id, &options.lang, Some((&steps, 1))) {
-            Ok(t) => {
-                steps.done(1);
-                t
-            }
-            Err(err) => {
-                steps.fail(1);
-                format!("Transcript not available. ({err})")
-            }
-        };
+        let transcript =
+            match fetch_transcript(&client, &video_id, &options.lang, Some((&steps, 1))) {
+                Ok(t) => {
+                    steps.done(1);
+                    t
+                }
+                Err(err) => {
+                    steps.fail(1);
+                    format!("Transcript not available. ({err})")
+                }
+            };
 
         steps.start(2);
-        let comments =
-            get_comments_paginated(&client, &api_key, &video_id, details.comment_count, Some((&steps, 2)));
+        let comments = get_comments_paginated(
+            &client,
+            &api_key,
+            &video_id,
+            details.comment_count,
+            Some((&steps, 2)),
+        );
         steps.done(2);
 
         drop(steps);
@@ -1037,7 +1072,10 @@ mod tests {
 
     #[test]
     fn sanitize_collapses_whitespace_and_trims() {
-        assert_eq!(sanitize_filename("  hello   world  ", "vid123"), "hello world");
+        assert_eq!(
+            sanitize_filename("  hello   world  ", "vid123"),
+            "hello world"
+        );
     }
 
     #[test]
@@ -1100,7 +1138,10 @@ mod tests {
 
     #[test]
     fn video_id_rejects_non_youtube_url() {
-        assert_eq!(get_video_id("https://example.com/watch?v=dQw4w9WgXcQ"), None);
+        assert_eq!(
+            get_video_id("https://example.com/watch?v=dQw4w9WgXcQ"),
+            None
+        );
         assert_eq!(get_video_id("not a url"), None);
     }
 
@@ -1141,13 +1182,25 @@ mod tests {
             track("en", "", "en-manual"),
             track("nl", "", "nl-manual"),
         ];
-        assert_eq!(pick_caption_track(&tracks, "en").unwrap().base_url, "en-manual");
-        assert_eq!(pick_caption_track(&tracks, "nl").unwrap().base_url, "nl-manual");
+        assert_eq!(
+            pick_caption_track(&tracks, "en").unwrap().base_url,
+            "en-manual"
+        );
+        assert_eq!(
+            pick_caption_track(&tracks, "nl").unwrap().base_url,
+            "nl-manual"
+        );
         // requested lang only has auto-generated: take it
         let auto_only = vec![track("en", "asr", "en-auto"), track("nl", "", "nl-manual")];
-        assert_eq!(pick_caption_track(&auto_only, "en").unwrap().base_url, "en-auto");
+        assert_eq!(
+            pick_caption_track(&auto_only, "en").unwrap().base_url,
+            "en-auto"
+        );
         // unknown lang: fall back to first manual track, then first
-        assert_eq!(pick_caption_track(&tracks, "de").unwrap().base_url, "en-manual");
+        assert_eq!(
+            pick_caption_track(&tracks, "de").unwrap().base_url,
+            "en-manual"
+        );
         assert!(pick_caption_track(&[], "en").is_none());
     }
 
