@@ -1,14 +1,14 @@
 {
   "name": "yt",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "milestone": {
     "name": "v0.1 LLM Workflow Extensions",
     "version": "0.1.0",
-    "status": "in_progress"
+    "status": "complete"
   },
   "phase": {
-    "number": 2,
-    "name": "Claude Summarization",
+    "number": 3,
+    "name": "Progress UI",
     "status": "complete"
   },
   "loop": {

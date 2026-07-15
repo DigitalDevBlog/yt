@@ -5,7 +5,8 @@ use quick_xml::events::Event;
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::json;
-use std::io::Write;
+use std::cell::Cell;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -151,19 +152,44 @@ fn transcript_xml_to_text(xml: &str) -> Result<String> {
     Ok(parts.join(" "))
 }
 
-fn get_transcript(client: &reqwest::blocking::Client, video_id: &str, lang: &str) -> Result<String> {
+/// Download and decode the transcript. When `progress` is Some and the caption
+/// response reports a Content-Length, the byte download advances a measured bar;
+/// otherwise it reads normally (leaving any spinner running).
+fn fetch_transcript(
+    client: &reqwest::blocking::Client,
+    video_id: &str,
+    lang: &str,
+    progress: Option<(&Steps, usize)>,
+) -> Result<String> {
     let tracks = get_caption_tracks(client, video_id)?;
     let track = pick_caption_track(&tracks, lang).ok_or_else(|| anyhow!("no caption tracks found"))?;
-    let xml = client
+    let response = client
         .get(&track.base_url)
         .header(reqwest::header::USER_AGENT, ANDROID_USER_AGENT)
         .send()?
-        .error_for_status()?
-        .text()?;
+        .error_for_status()?;
+    let xml = match progress {
+        Some((steps, i)) => {
+            // Determinate byte bar when the feed reports a length, else a live
+            // byte counter — either way the download shows measured movement.
+            let pb = match response.content_length() {
+                Some(len) => steps.set_bytes(i, len),
+                None => steps.set_bytes_counter(i),
+            };
+            let mut buf = String::new();
+            pb.wrap_read(response).read_to_string(&mut buf)?;
+            buf
+        }
+        None => response.text()?,
+    };
     if xml.is_empty() {
         return Err(anyhow!("caption track returned an empty response"));
     }
     transcript_xml_to_text(&xml)
+}
+
+fn get_transcript(client: &reqwest::blocking::Client, video_id: &str, lang: &str) -> Result<String> {
+    fetch_transcript(client, video_id, lang, None)
 }
 
 #[derive(Deserialize)]
@@ -178,6 +204,8 @@ struct VideoItem {
     content_details: ContentDetails,
     #[serde(default)]
     snippet: Snippet,
+    #[serde(default)]
+    statistics: Statistics,
 }
 
 #[derive(Deserialize)]
@@ -191,9 +219,17 @@ struct Snippet {
     title: String,
 }
 
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct Statistics {
+    #[serde(default)]
+    comment_count: Option<String>,
+}
+
 struct VideoDetails {
     duration_minutes: u64,
     title: String,
+    comment_count: Option<u64>,
 }
 
 fn get_video_details(
@@ -204,7 +240,7 @@ fn get_video_details(
     let response: VideosResponse = client
         .get("https://www.googleapis.com/youtube/v3/videos")
         .query(&[
-            ("part", "contentDetails,snippet"),
+            ("part", "contentDetails,snippet,statistics"),
             ("id", video_id),
             ("key", api_key),
         ])
@@ -218,16 +254,24 @@ fn get_video_details(
         .next()
         .ok_or_else(|| anyhow!("video not found"))?;
     let duration_minutes = parse_duration_minutes(&item.content_details.duration)?;
+    let comment_count = item
+        .statistics
+        .comment_count
+        .and_then(|c| c.parse::<u64>().ok());
     Ok(VideoDetails {
         duration_minutes,
         title: item.snippet.title,
+        comment_count,
     })
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CommentThreadsResponse {
     #[serde(default)]
     items: Vec<CommentThread>,
+    #[serde(default)]
+    next_page_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -299,6 +343,83 @@ fn get_comments(
     comments
 }
 
+const MAX_COMMENT_PAGES: usize = 5;
+
+/// Fetch comments across up to `MAX_COMMENT_PAGES` pages. When `progress` and
+/// `target` (the video's commentCount) are known, advances a count-measured bar;
+/// otherwise leaves any spinner running.
+fn get_comments_paginated(
+    client: &reqwest::blocking::Client,
+    api_key: &str,
+    video_id: &str,
+    target: Option<u64>,
+    progress: Option<(&Steps, usize)>,
+) -> Vec<String> {
+    let bar_len = target.map(|t| t.min((MAX_COMMENT_PAGES * 100) as u64));
+    let bar: Option<&ProgressBar> = match (progress, bar_len) {
+        (Some((steps, i)), Some(len)) => Some(steps.set_count(i, len)),
+        (Some((steps, i)), None) => Some(steps.bar(i)),
+        (None, _) => None,
+    };
+
+    let mut comments = Vec::new();
+    let mut page_token: Option<String> = None;
+    for _ in 0..MAX_COMMENT_PAGES {
+        let mut query = vec![
+            ("part", "snippet,replies".to_string()),
+            ("videoId", video_id.to_string()),
+            ("textFormat", "plainText".to_string()),
+            ("maxResults", "100".to_string()),
+            ("key", api_key.to_string()),
+        ];
+        if let Some(ref tok) = page_token {
+            query.push(("pageToken", tok.clone()));
+        }
+
+        let result: Result<CommentThreadsResponse> = (|| {
+            Ok(client
+                .get("https://www.googleapis.com/youtube/v3/commentThreads")
+                .query(&query)
+                .send()?
+                .error_for_status()?
+                .json()?)
+        })();
+
+        let response = match result {
+            Ok(response) => response,
+            Err(err) => {
+                if comments.is_empty() {
+                    eprintln!("Failed to fetch comments: {err}");
+                }
+                break;
+            }
+        };
+
+        for thread in response.items {
+            comments.push(thread.snippet.top_level_comment.snippet.text_display);
+            if let Some(replies) = thread.replies {
+                for reply in replies.comments {
+                    comments.push(format!("    - {}", reply.snippet.text_display));
+                }
+            }
+        }
+
+        if let Some(pb) = bar {
+            let pos = match bar_len {
+                Some(len) => (comments.len() as u64).min(len),
+                None => comments.len() as u64,
+            };
+            pb.set_position(pos);
+        }
+
+        match response.next_page_token {
+            Some(tok) => page_token = Some(tok),
+            None => break,
+        }
+    }
+    comments
+}
+
 const DEFAULT_SUMMARY_PROMPT: &str =
     "Summarize the key points and main takeaways of this video transcript as concise bullet points.";
 
@@ -350,10 +471,21 @@ fn sanitize_filename(title: &str, video_id: &str) -> String {
 /// ```
 ///
 /// Each step is pending, then spins while active, then shows ✓ (done) or ✗ (fail).
+/// What indicator a step currently shows — determines how `done` freezes the
+/// finished line so the completed bar/counter stays put on screen.
+#[derive(Clone, Copy)]
+enum StepKind {
+    Elapsed,
+    Bytes,
+    BytesCounter,
+    Count,
+}
+
 struct Steps {
     _mp: MultiProgress,
     bars: Vec<ProgressBar>,
     titles: Vec<String>,
+    kinds: Vec<Cell<StepKind>>,
     _connectors: Vec<ProgressBar>,
 }
 
@@ -378,6 +510,7 @@ impl Steps {
         }
         Steps {
             _mp: mp,
+            kinds: titles.iter().map(|_| Cell::new(StepKind::Elapsed)).collect(),
             bars,
             titles: titles.iter().map(|t| t.to_string()).collect(),
             _connectors: connectors,
@@ -389,7 +522,7 @@ impl Steps {
     }
 
     fn active_style() -> ProgressStyle {
-        ProgressStyle::with_template("{prefix} {msg} {spinner}")
+        ProgressStyle::with_template("{prefix} {msg} [{elapsed}] {spinner}")
             .unwrap()
             .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ")
     }
@@ -398,16 +531,72 @@ impl Steps {
         ProgressStyle::with_template("{msg}").unwrap()
     }
 
+    /// The underlying bar for step `i`, so a fetch can set_position it.
+    fn bar(&self, i: usize) -> &ProgressBar {
+        &self.bars[i]
+    }
+
     fn start(&self, i: usize) {
+        self.kinds[i].set(StepKind::Elapsed);
         let pb = &self.bars[i];
+        pb.reset_elapsed();
         pb.set_style(Steps::active_style());
         pb.enable_steady_tick(Duration::from_millis(100));
     }
 
-    fn done(&self, i: usize) {
+    /// Switch step `i` to a determinate byte bar of the given length.
+    fn set_bytes(&self, i: usize, len: u64) -> &ProgressBar {
+        self.kinds[i].set(StepKind::Bytes);
         let pb = &self.bars[i];
-        pb.set_style(ProgressStyle::with_template("{prefix} {msg} ✓").unwrap());
-        pb.finish_with_message(self.titles[i].clone());
+        pb.set_style(
+            ProgressStyle::with_template("{prefix} {msg} [{bar:20.cyan/blue}] {bytes}/{total_bytes}")
+                .unwrap()
+                .progress_chars("=> "),
+        );
+        pb.set_length(len);
+        pb
+    }
+
+    /// Switch step `i` to an indeterminate byte counter (no known Content-Length).
+    fn set_bytes_counter(&self, i: usize) -> &ProgressBar {
+        self.kinds[i].set(StepKind::BytesCounter);
+        let pb = &self.bars[i];
+        pb.set_style(
+            ProgressStyle::with_template("{prefix} {msg} [{elapsed}] {decimal_bytes} {spinner}")
+                .unwrap()
+                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "),
+        );
+        pb
+    }
+
+    /// Switch step `i` to a determinate count bar of the given length.
+    fn set_count(&self, i: usize, len: u64) -> &ProgressBar {
+        self.kinds[i].set(StepKind::Count);
+        let pb = &self.bars[i];
+        pb.set_style(
+            ProgressStyle::with_template("{prefix} {msg} [{bar:20.cyan/blue}] {pos}/{len}")
+                .unwrap()
+                .progress_chars("=> "),
+        );
+        pb.set_length(len);
+        pb
+    }
+
+    /// Freeze step `i` as finished, keeping its bar/counter visible with a ✓.
+    fn done(&self, i: usize) {
+        let template = match self.kinds[i].get() {
+            StepKind::Elapsed => "{prefix} {msg} [{elapsed}] ✓",
+            StepKind::Bytes => "{prefix} {msg} [{bar:20.green}] {bytes}/{total_bytes} ✓",
+            StepKind::BytesCounter => "{prefix} {msg} {decimal_bytes} ✓",
+            StepKind::Count => "{prefix} {msg} [{bar:20.green}] {pos}/{len} ✓",
+        };
+        let pb = &self.bars[i];
+        pb.set_style(
+            ProgressStyle::with_template(template)
+                .unwrap()
+                .progress_chars("=> "),
+        );
+        pb.finish();
     }
 
     fn fail(&self, i: usize) {
@@ -490,7 +679,7 @@ fn run_summary(
     };
 
     steps.start(1);
-    let transcript = match get_transcript(client, video_id, lang) {
+    let transcript = match fetch_transcript(client, video_id, lang, Some((&steps, 1))) {
         Ok(t) => {
             steps.done(1);
             t
@@ -563,12 +752,48 @@ fn main() -> Result<()> {
         eprintln!("Wrote {}", path.display());
     } else {
         let api_key = require_key()?;
-        let details = get_video_details(&client, &api_key, &video_id)?;
+        let steps = Steps::new(&[
+            "Fetching video details",
+            "Downloading transcript",
+            "Fetching comments",
+        ]);
+
+        steps.start(0);
+        let details = match get_video_details(&client, &api_key, &video_id) {
+            Ok(d) => {
+                steps.done(0);
+                d
+            }
+            Err(e) => {
+                steps.fail(0);
+                return Err(e);
+            }
+        };
+
+        steps.start(1);
+        let transcript = match fetch_transcript(&client, &video_id, &options.lang, Some((&steps, 1))) {
+            Ok(t) => {
+                steps.done(1);
+                t
+            }
+            Err(err) => {
+                steps.fail(1);
+                format!("Transcript not available. ({err})")
+            }
+        };
+
+        steps.start(2);
+        let comments =
+            get_comments_paginated(&client, &api_key, &video_id, details.comment_count, Some((&steps, 2)));
+        steps.done(2);
+
+        drop(steps);
+
         let output = json!({
             "title": details.title,
-            "transcript": transcript_or_message(&client),
+            "transcript": transcript,
             "duration": details.duration_minutes,
-            "comments": get_comments(&client, &api_key, &video_id),
+            "comments": comments,
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     }

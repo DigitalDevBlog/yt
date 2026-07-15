@@ -11,8 +11,8 @@ summary pipeline.
 ## Current Milestone
 
 **v0.1 LLM Workflow Extensions** (v0.1.0)
-Status: In progress
-Phases: 2 of 3 complete
+Status: ✅ Complete
+Phases: 3 of 3 complete
 
 ## Phases
 
@@ -26,7 +26,7 @@ Phases execute in numeric order: 1 → 2 → 3
 |-------|------|-------|--------|-----------|
 | 1 | Title Capture | 1 | ✅ Complete | 2026-07-15 |
 | 2 | Claude Summarization | 1 | ✅ Complete | 2026-07-15 |
-| 3 | Progress UI | TBD | Not started | - |
+| 3 | Progress UI | 1 | ✅ Complete | 2026-07-15 |
 
 ## Phase Details
 

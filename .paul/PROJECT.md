@@ -19,8 +19,8 @@ workflows with a single command.
 | Attribute | Value |
 |-----------|-------|
 | Type | Application (CLI) |
-| Version | 0.0.0 |
-| Status | Initializing (working tool, extending) |
+| Version | 0.1.0 |
+| Status | v0.1 complete (title, summarization, progress UI shipped) |
 | Last Updated | 2026-07-15 |
 
 ## Requirements
@@ -41,16 +41,16 @@ workflows with a single command.
 - [x] Video title capture (default JSON + `--title`) — Phase 1
 - [x] Claude summarization (`-s`/`--summarize` → `claude -p` → `<title>.md`;
       prompt from `.env`, override with `-p`; stepped progress UI) — Phase 2
+- [x] Progress UI on the default run: stepped display with measured bars
+      (transcript bytes, comment pagination) that stay put once finished — Phase 3
 
 ### Active (In Progress)
 
-None yet.
+None.
 
 ### Planned (Next)
 
-- [ ] Progress UI: generalize the stepped display to other modes and add MEASURED
-      bars (comment pagination, transcript bytes) — Phase 3. (The stepped
-      display itself shipped in Phase 2 for the summarize flow.)
+None — milestone v0.1 complete.
 
 ### Out of Scope
 
@@ -101,7 +101,7 @@ None yet.
 |--------|--------|---------|--------|
 | Title present in text + JSON output | Yes | Yes | Achieved |
 | Summarization works with zero API cost | Yes | Yes | Achieved |
-| Progress visible without polluting stdout | Yes | No | Not started |
+| Progress visible without polluting stdout | Yes | Yes | Achieved |
 
 ## Tech Stack / Tools
 
@@ -117,4 +117,4 @@ None yet.
 
 ---
 *Created: 2026-07-15*
-*Last updated: 2026-07-15 after Phase 2 (Claude Summarization)*
+*Last updated: 2026-07-15 after Phase 3 (Progress UI) — milestone v0.1 complete*
