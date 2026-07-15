@@ -1,7 +1,8 @@
 # yt — User Manual
 
 `yt` is a command-line tool that takes a YouTube URL and gives you the video's
-**transcript**, **duration**, and **comments** — as plain text or JSON. It is
+**title**, **transcript**, **duration**, and **comments** — as plain text or
+JSON — and can **summarize** the video with Claude in a single command. It is
 built for pipelines: point it at a video, pipe the output into whatever
 processes it next (e.g. `jq`, a summarizer, an LLM prompt).
 
@@ -36,6 +37,26 @@ v3** and need an API key. The transcript feature needs **no key**.
 A `YOUTUBE_API_KEY` environment variable set in your shell also works and
 takes effect even without the file.
 
+### Summarization (`--summarize`)
+
+The `--summarize` mode shells out to the **Claude Code CLI** (`claude`), so it
+uses your existing Claude subscription — no Anthropic API key and no per-call
+cost. You need the `claude` binary on your `PATH`
+(https://claude.com/claude-code).
+
+The summary prompt is resolved in this order:
+
+1. `--prompt "<text>"` on the command line
+2. `YT_SUMMARY_PROMPT` from `~/.config/yt/.env` (or the environment)
+3. A built-in default (*"Summarize the key points and main takeaways of this
+   video transcript as concise bullet points."*)
+
+To set your own default prompt, add it alongside the API key:
+
+```sh
+echo 'YT_SUMMARY_PROMPT="Summarize this video as 5 bullet points."' >> ~/.config/yt/.env
+```
+
 ## Usage
 
 ```
@@ -47,6 +68,9 @@ yt [OPTIONS] <URL>
 | `-d` | `--duration` | Output only the duration, in whole minutes |
 | `-t` | `--transcript` | Output only the transcript, as plain text |
 | `-c` | `--comments` | Output the comments, as a JSON array |
+| | `--title` | Output only the video title |
+| `-s` | `--summarize` | Summarize the transcript with Claude, writing `<title>.md` |
+| `-p <TEXT>` | `--prompt <TEXT>` | Override the summary prompt (used with `--summarize`) |
 | `-l <CODE>` | `--lang <CODE>` | Transcript language (default: `en`) |
 | `-h` | `--help` | Show help |
 | `-V` | `--version` | Show version |
@@ -56,14 +80,14 @@ Accepted URL forms: `youtube.com/watch?v=ID` (with or without `https://` and
 `youtube.com/embed/ID`.
 
 If more than one mode flag is given, precedence is
-`--duration` > `--transcript` > `--comments`.
+`--duration` > `--title` > `--transcript` > `--comments` > `--summarize`.
 
-## The four output modes
+## Output modes
 
 ### Default: everything as JSON
 
-With no mode flags, `yt` prints one JSON object with all three fields
-(this mode needs the API key):
+With no mode flags, `yt` prints one JSON object with the title, transcript,
+duration, and comments (this mode needs the API key):
 
 ```sh
 yt "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
@@ -77,9 +101,32 @@ yt "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
     "Another top-level comment"
   ],
   "duration": 4,
+  "title": "Rick Astley - Never Gonna Give You Up (Official Video) (4K Remaster)",
   "transcript": "We're no strangers to love You know the rules and so do I ..."
 }
 ```
+
+While it runs, a stepped **progress display** is shown on *stderr* (see
+[Progress display](#progress-display)), so redirecting or piping stdout stays
+clean:
+
+```sh
+yt "https://youtu.be/dQw4w9WgXcQ" | jq .title
+```
+
+Unlike the single-purpose `--comments` mode (one page of 100), the default mode
+**paginates comments** across up to 5 pages (≈500), so its `comments` array is
+usually larger.
+
+### `--title`: the video title
+
+```sh
+yt --title "https://youtu.be/dQw4w9WgXcQ"
+# Rick Astley - Never Gonna Give You Up (Official Video) (4K Remaster)
+```
+
+Prints just the title (needs the API key — it comes from the same Data API call
+as the duration).
 
 ### `--transcript`: plain text, no API key needed
 
@@ -119,6 +166,53 @@ Top-level comments appear as-is; replies follow their parent, prefixed with
 four spaces and `- `. If comments are disabled on the video or the fetch
 fails, the reason is printed to stderr and the array is empty.
 
+(This single-purpose mode fetches one page. The default combined mode paginates
+up to ≈500 — see [Default](#default-everything-as-json).)
+
+### `--summarize`: transcript → Claude → `<title>.md`
+
+```sh
+yt --summarize "https://youtu.be/dQw4w9WgXcQ"
+# (writes) Rick Astley - Never Gonna Give You Up (Official Video) (4K Remaster).md
+```
+
+`--summarize` (short: `-s`) runs the whole pipeline: it downloads the
+transcript, pipes it to `claude -p "<prompt>"`, and writes the returned summary
+to a Markdown file **in the current directory**, named after the video title.
+It needs the API key (for the title) and the `claude` CLI (see
+[Summarization](#summarization---summarize)).
+
+- The output is **file-only** — nothing is printed to stdout. The path written
+  is reported on stderr (`Wrote <file>.md`).
+- The filename is sanitized (illegal characters removed, length-capped); if the
+  title is empty it falls back to the video ID.
+- Override the prompt for one run with `-p` / `--prompt`:
+
+  ```sh
+  yt -s -p "List the 3 most important takeaways" "https://youtu.be/dQw4w9WgXcQ"
+  ```
+
+## Progress display
+
+The `--summarize` and default combined modes show a live, multi-step progress
+display on **stderr** while they work — one line per step, with a `◦` bullet and
+a `|` connector:
+
+```
+◦ Fetching video details [0s] ✓
+|
+◦ Downloading transcript 63.2 KiB ✓
+|
+◦ Fetching comments [====================] 500/500 ✓
+```
+
+Steps that have a known total (comment pagination, and the transcript download
+when the server reports a length) show a filled bar; others show an elapsed
+timer or a live byte counter. Finished steps stay put, keeping their bar with a
+`✓`. Because it's all on stderr, it never contaminates the JSON/summary on
+stdout, and it automatically disappears when output is piped or redirected
+(non-terminal).
+
 ## Choosing the transcript language
 
 `--lang` takes a BCP-47 language code as YouTube uses them: `en`, `nl`, `de-DE`,
@@ -151,6 +245,10 @@ the fallback instead).
   one. The message includes the command to fix it.
 - **`error getting video details` / `video not found`** — the Data API call
   failed (bad key, quota exceeded) or the video ID doesn't exist.
+- **``the `claude` CLI is required for --summarize ...``** — you used
+  `--summarize` without the `claude` binary on your `PATH`. No file is written.
+- **`cannot summarize: transcript unavailable`** — `--summarize` needs a
+  transcript; the video has none, so nothing is sent to Claude.
 
 Two failures are deliberately **not** fatal, so pipelines keep flowing:
 
@@ -192,7 +290,7 @@ suddenly fail for every video, the fetch strategy likely needs updating again.
 ## Development
 
 ```sh
-cargo test           # unit tests (URL parsing, duration math, track selection, XML parsing)
+cargo test           # unit tests (URL parsing, duration math, track selection, XML parsing, filename sanitization)
 cargo run -- -t URL  # run without installing
 cargo build --release
 ```

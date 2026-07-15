@@ -1,8 +1,9 @@
 # yt
 
-CLI that takes a YouTube URL and outputs the video's transcript, duration in
-minutes, and comments — as plain text or JSON. Written in Rust, converted from
-the original Go version at [danielmiessler/yt](https://github.com/danielmiessler/yt).
+CLI that takes a YouTube URL and outputs the video's title, transcript, duration
+in minutes, and comments — as plain text or JSON — and can summarize the video
+with Claude in one command. Written in Rust, converted from the original Go
+version at [danielmiessler/yt](https://github.com/danielmiessler/yt).
 
 ## Install
 
@@ -15,14 +16,21 @@ cargo install --path .
 ```
 yt [OPTIONS] <URL>
 
-  -d, --duration     Output only the duration (whole minutes)
-  -t, --transcript   Output only the transcript
-  -c, --comments     Output the comments on the video (JSON array)
-  -l, --lang <CODE>  Language for the transcript [default: en]
+  -d, --duration       Output only the duration (whole minutes)
+  -t, --transcript     Output only the transcript
+  -c, --comments       Output the comments on the video (JSON array)
+      --title          Output only the video title
+  -s, --summarize      Summarize the transcript with Claude, writing <title>.md
+  -p, --prompt <TEXT>  Override the summary prompt (with --summarize)
+  -l, --lang <CODE>    Language for the transcript [default: en]
 ```
 
-With no flags, outputs a JSON object with all three:
-`{"transcript": ..., "duration": ..., "comments": [...]}`.
+With no flags, outputs a JSON object with all four fields:
+`{"title": ..., "transcript": ..., "duration": ..., "comments": [...]}`.
+
+The default and `--summarize` modes show a stepped progress display on stderr
+(stdout stays clean JSON). `--summarize` writes the summary to a `<title>.md`
+file in the current directory.
 
 ## Configuration
 
@@ -36,6 +44,11 @@ echo 'YOUTUBE_API_KEY="[Your API Key]"' >> ~/.config/yt/.env
 ```
 
 The transcript mode needs no API key.
+
+`--summarize` uses the **Claude Code CLI** (the `claude` binary on your `PATH`)
+— your Claude subscription, no Anthropic API key or per-call cost. Set a default
+summary prompt with `YT_SUMMARY_PROMPT` in the same `.env`. See
+[MANUAL.md](MANUAL.md) for full documentation.
 
 ## License
 
