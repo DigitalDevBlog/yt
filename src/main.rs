@@ -1,9 +1,14 @@
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use quick_xml::events::Event;
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::json;
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 /// Get the transcript, duration, and comments of a YouTube video.
 #[derive(Parser)]
@@ -20,6 +25,18 @@ struct Options {
     /// Output the comments on the video
     #[arg(short, long)]
     comments: bool,
+
+    /// Output only the video title
+    #[arg(long)]
+    title: bool,
+
+    /// Summarize the transcript with `claude -p` and write it to <title>.md
+    #[arg(short, long)]
+    summarize: bool,
+
+    /// Override the summary prompt (defaults to YT_SUMMARY_PROMPT or a built-in)
+    #[arg(short = 'p', long)]
+    prompt: Option<String>,
 
     /// Language for the transcript
     #[arg(short, long, default_value = "en")]
@@ -159,6 +176,8 @@ struct VideosResponse {
 #[serde(rename_all = "camelCase")]
 struct VideoItem {
     content_details: ContentDetails,
+    #[serde(default)]
+    snippet: Snippet,
 }
 
 #[derive(Deserialize)]
@@ -166,20 +185,43 @@ struct ContentDetails {
     duration: String,
 }
 
-fn get_duration_minutes(
+#[derive(Deserialize, Default)]
+struct Snippet {
+    #[serde(default)]
+    title: String,
+}
+
+struct VideoDetails {
+    duration_minutes: u64,
+    title: String,
+}
+
+fn get_video_details(
     client: &reqwest::blocking::Client,
     api_key: &str,
     video_id: &str,
-) -> Result<u64> {
+) -> Result<VideoDetails> {
     let response: VideosResponse = client
         .get("https://www.googleapis.com/youtube/v3/videos")
-        .query(&[("part", "contentDetails"), ("id", video_id), ("key", api_key)])
+        .query(&[
+            ("part", "contentDetails,snippet"),
+            ("id", video_id),
+            ("key", api_key),
+        ])
         .send()?
         .error_for_status()
         .context("error getting video details")?
         .json()?;
-    let item = response.items.first().ok_or_else(|| anyhow!("video not found"))?;
-    parse_duration_minutes(&item.content_details.duration)
+    let item = response
+        .items
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("video not found"))?;
+    let duration_minutes = parse_duration_minutes(&item.content_details.duration)?;
+    Ok(VideoDetails {
+        duration_minutes,
+        title: item.snippet.title,
+    })
 }
 
 #[derive(Deserialize)]
@@ -257,6 +299,225 @@ fn get_comments(
     comments
 }
 
+const DEFAULT_SUMMARY_PROMPT: &str =
+    "Summarize the key points and main takeaways of this video transcript as concise bullet points.";
+
+/// Resolve the summary prompt: explicit --prompt wins, then YT_SUMMARY_PROMPT
+/// from the environment (or ~/.config/yt/.env), then a built-in default.
+fn resolve_prompt(cli: Option<String>) -> String {
+    if let Some(p) = cli {
+        return p;
+    }
+    match std::env::var("YT_SUMMARY_PROMPT") {
+        Ok(p) if !p.trim().is_empty() => p,
+        _ => DEFAULT_SUMMARY_PROMPT.to_string(),
+    }
+}
+
+/// Turn a video title into a safe filename base (no extension). Strips
+/// filesystem-illegal and control characters, collapses whitespace, trims, and
+/// caps length. Falls back to the video id when nothing usable remains.
+fn sanitize_filename(title: &str, video_id: &str) -> String {
+    let cleaned: String = title
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => ' ',
+            c if c.is_control() => ' ',
+            c => c,
+        })
+        .collect();
+    let mut name = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    name = name
+        .trim_matches(|c: char| c == '.' || c.is_whitespace())
+        .to_string();
+    const MAX: usize = 100;
+    if name.chars().count() > MAX {
+        name = name.chars().take(MAX).collect::<String>().trim_end().to_string();
+    }
+    if name.is_empty() {
+        video_id.to_string()
+    } else {
+        name
+    }
+}
+
+/// A vertical, connected list of workflow steps rendered to stderr:
+///
+/// ```text
+/// ◦ Fetching video details ✓
+/// |
+/// ◦ Downloading transcript ⠹
+/// ```
+///
+/// Each step is pending, then spins while active, then shows ✓ (done) or ✗ (fail).
+struct Steps {
+    _mp: MultiProgress,
+    bars: Vec<ProgressBar>,
+    titles: Vec<String>,
+    _connectors: Vec<ProgressBar>,
+}
+
+impl Steps {
+    fn new(titles: &[&str]) -> Steps {
+        let mp = MultiProgress::new();
+        let mut bars = Vec::new();
+        let mut connectors = Vec::new();
+        for (i, title) in titles.iter().enumerate() {
+            let pb = mp.add(ProgressBar::new_spinner());
+            pb.set_style(Steps::pending_style());
+            pb.set_prefix("◦");
+            pb.set_message(title.to_string());
+            pb.tick();
+            bars.push(pb);
+            if i + 1 < titles.len() {
+                let conn = mp.add(ProgressBar::new_spinner());
+                conn.set_style(Steps::connector_style());
+                conn.finish_with_message("|");
+                connectors.push(conn);
+            }
+        }
+        Steps {
+            _mp: mp,
+            bars,
+            titles: titles.iter().map(|t| t.to_string()).collect(),
+            _connectors: connectors,
+        }
+    }
+
+    fn pending_style() -> ProgressStyle {
+        ProgressStyle::with_template("{prefix} {msg}").unwrap()
+    }
+
+    fn active_style() -> ProgressStyle {
+        ProgressStyle::with_template("{prefix} {msg} {spinner}")
+            .unwrap()
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ")
+    }
+
+    fn connector_style() -> ProgressStyle {
+        ProgressStyle::with_template("{msg}").unwrap()
+    }
+
+    fn start(&self, i: usize) {
+        let pb = &self.bars[i];
+        pb.set_style(Steps::active_style());
+        pb.enable_steady_tick(Duration::from_millis(100));
+    }
+
+    fn done(&self, i: usize) {
+        let pb = &self.bars[i];
+        pb.set_style(ProgressStyle::with_template("{prefix} {msg} ✓").unwrap());
+        pb.finish_with_message(self.titles[i].clone());
+    }
+
+    fn fail(&self, i: usize) {
+        let pb = &self.bars[i];
+        pb.set_style(ProgressStyle::with_template("{prefix} {msg} ✗").unwrap());
+        pb.finish_with_message(self.titles[i].clone());
+    }
+}
+
+/// Pipe the transcript to `claude -p "<prompt>"` and return its stdout summary.
+fn run_claude(prompt: &str, transcript: &str) -> Result<String> {
+    let mut child = Command::new("claude")
+        .args(["-p", prompt])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                anyhow!(
+                    "the `claude` CLI is required for --summarize; install it and \
+                     ensure it is on your PATH"
+                )
+            } else {
+                anyhow!("failed to start claude: {err}")
+            }
+        })?;
+
+    // Write the transcript to claude's stdin from a separate thread so stdout can
+    // be read concurrently — avoids a pipe deadlock on large transcripts.
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("failed to open claude stdin"))?;
+    let transcript_owned = transcript.to_string();
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(transcript_owned.as_bytes());
+    });
+
+    let output = child.wait_with_output().context("failed to run claude")?;
+    let _ = writer.join();
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!(
+            "claude exited with status {}: {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Run the summarize pipeline with a stepped progress display: fetch video
+/// details (for the title), download the transcript, summarize with claude, and
+/// write the result to `<sanitized-title>.md` in the current directory.
+fn run_summary(
+    client: &reqwest::blocking::Client,
+    api_key: &str,
+    video_id: &str,
+    lang: &str,
+    prompt: &str,
+) -> Result<PathBuf> {
+    let steps = Steps::new(&[
+        "Fetching video details",
+        "Downloading transcript",
+        "Summarizing with claude",
+    ]);
+
+    steps.start(0);
+    let details = match get_video_details(client, api_key, video_id) {
+        Ok(d) => {
+            steps.done(0);
+            d
+        }
+        Err(e) => {
+            steps.fail(0);
+            return Err(e);
+        }
+    };
+
+    steps.start(1);
+    let transcript = match get_transcript(client, video_id, lang) {
+        Ok(t) => {
+            steps.done(1);
+            t
+        }
+        Err(e) => {
+            steps.fail(1);
+            return Err(e).context("cannot summarize: transcript unavailable");
+        }
+    };
+
+    steps.start(2);
+    let summary = match run_claude(prompt, &transcript) {
+        Ok(s) => {
+            steps.done(2);
+            s
+        }
+        Err(e) => {
+            steps.fail(2);
+            return Err(e);
+        }
+    };
+
+    let path = PathBuf::from(format!("{}.md", sanitize_filename(&details.title, video_id)));
+    std::fs::write(&path, summary).with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(path)
+}
+
 fn main() -> Result<()> {
     let options = Options::parse();
 
@@ -285,17 +546,28 @@ fn main() -> Result<()> {
     };
 
     if options.duration {
-        println!("{}", get_duration_minutes(&client, &require_key()?, &video_id)?);
+        let details = get_video_details(&client, &require_key()?, &video_id)?;
+        println!("{}", details.duration_minutes);
+    } else if options.title {
+        let details = get_video_details(&client, &require_key()?, &video_id)?;
+        println!("{}", details.title);
     } else if options.transcript {
         println!("{}", transcript_or_message(&client));
     } else if options.comments {
         let comments = get_comments(&client, &require_key()?, &video_id);
         println!("{}", serde_json::to_string_pretty(&comments)?);
+    } else if options.summarize {
+        let api_key = require_key()?;
+        let prompt = resolve_prompt(options.prompt.clone());
+        let path = run_summary(&client, &api_key, &video_id, &options.lang, &prompt)?;
+        eprintln!("Wrote {}", path.display());
     } else {
         let api_key = require_key()?;
+        let details = get_video_details(&client, &api_key, &video_id)?;
         let output = json!({
+            "title": details.title,
             "transcript": transcript_or_message(&client),
-            "duration": get_duration_minutes(&client, &api_key, &video_id)?,
+            "duration": details.duration_minutes,
             "comments": get_comments(&client, &api_key, &video_id),
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
@@ -307,6 +579,37 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitize_strips_illegal_chars() {
+        assert_eq!(
+            sanitize_filename("A/B:C*D?\"E<F>G|H\\I", "vid123"),
+            "A B C D E F G H I"
+        );
+    }
+
+    #[test]
+    fn sanitize_collapses_whitespace_and_trims() {
+        assert_eq!(sanitize_filename("  hello   world  ", "vid123"), "hello world");
+    }
+
+    #[test]
+    fn sanitize_empty_title_falls_back_to_video_id() {
+        assert_eq!(sanitize_filename("   ", "vid123"), "vid123");
+        assert_eq!(sanitize_filename("///", "vid123"), "vid123");
+    }
+
+    #[test]
+    fn sanitize_trims_dots() {
+        assert_eq!(sanitize_filename("...title...", "vid123"), "title");
+    }
+
+    #[test]
+    fn sanitize_truncates_long_titles() {
+        let long = "a".repeat(250);
+        let out = sanitize_filename(&long, "vid123");
+        assert_eq!(out.chars().count(), 100);
+    }
 
     #[test]
     fn video_id_from_watch_url() {
